@@ -1,12 +1,16 @@
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 
-def multilabel_classification_report(dataset, model):
+from model.dataset import split2feat
+
+def multilabel_classification_report(dataset, model, n_features=None):
     X_test, y_test = dataset.get_test_data()
+    if n_features:
+        X_test = split2feat(X_test, n_features)
     pred = model.predict(X_test)
     
-    loss, categorical_acc = model.evaluate(X_test, y_test)
-    print(f'Loss: {loss:.4f}, Binary Accuracy: {categorical_acc:.4f}')
+    res = model.evaluate(X_test, y_test)
+    # print(f'Loss: {res[0]:.4f}, Binary Accuracy: {res[1]:.4f}')
     
     # acc = np.logical_and(y_test == 1, (pred>=0.5)).sum(axis=0) / y_test.sum(axis=0)
 

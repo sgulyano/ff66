@@ -8,3 +8,5 @@ Microplastics_BCET_csv/
 model/.ipynb_checkpoints/
 
 *.pyc
+
+.ipynb_checkpoints/

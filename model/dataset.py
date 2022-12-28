@@ -23,6 +23,13 @@ class SpectraDataset:
         print(f'Read {self.train_data.shape[0]} spectra for training.')
         print('No. of data points/shifts per spectra (input shape) :', self.get_input_shape())
         print('No. of classes :', self.get_num_class())
+        
+        # read test data
+        self.X_test, y_target = self._read_data('test')
+        print(f'Read {self.X_test.shape[0]} spectra for testing.')
+        self.y_test = [(np.array(y_target) == label).astype('int8') for label in self.class_name]
+        self.y_test = np.vstack(self.y_test).T
+        
 #         fl = glob.glob(os.path.join(data_dir, 'train', '*.csv'))
 #         self.target = [re.search(r'/SD_(.*)_', f).group(1) for f in fl]
         
@@ -117,16 +124,17 @@ class SpectraDataset:
         return len(self.class_name)
     
     def get_test_data(self):
-        # read training data
-        X_test, y_target = self._read_data('test')
-        print(f'Read {X_test.shape[0]} spectra for testing.')
-        y_test = [(np.array(y_target) == label).astype('int8') for label in self.class_name]
-        return X_test.values, np.vstack(y_test).T
+        # # read training data
+        # X_test, y_target = self._read_data('test')
+        # print(f'Read {X_test.shape[0]} spectra for testing.')
+        # y_test = [(np.array(y_target) == label).astype('int8') for label in self.class_name]
+        # return X_test.values, np.vstack(y_test).T
+        return self.X_test.values, self.y_test
 
 
 
 class DataGenerator(tf.keras.utils.Sequence):
-    'Generates data for Keras'
+    'Generates data for CNN/ANN models as 1D arrays'
     def __init__(self, dataset, batch_size=32, shuffle=True, sigma=1):
         'Initialization'
         self.dataset = dataset
@@ -167,3 +175,62 @@ class DataGenerator(tf.keras.utils.Sequence):
         X_noisy = X + noise_G
         
         return self.dataset._normalize(X_noisy), y
+
+
+
+class DataGeneratorRNN(tf.keras.utils.Sequence):
+    'Generates data for RNN models as 2D arrays (multiple chunks of 1D array)'
+    def __init__(self, dataset, batch_size=32, shuffle=True, n_features = 24, sigma=1):
+        'Initialization'
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        
+        self.X = split2feat(dataset.train_data, n_features)
+        # self.X = np.zeros((dataset.train_data.shape[0], int(np.ceil(dataset.train_data.shape[1]/n_features)*n_features)), dtype=np.int32)
+        # # print(zeros.shape)
+        # self.X[:,:dataset.train_data.shape[1]] = self.dataset.get_training_data()
+        # self.X = self.X.reshape((self.X.shape[0], int(self.X.shape[1]/n_features), n_features))
+        self.data_shape = self.X.shape
+        
+        self.sigma = sigma
+        self.on_epoch_end()
+
+    def __len__(self):
+        'Denotes the number of batches per epoch'
+        return int(np.floor(self.data_shape[0] / self.batch_size))
+
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+
+        # Generate data
+        X, y = self.__data_generation(indexes)
+
+        return X, y
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        self.indexes = np.arange(self.data_shape[0])
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, indexes):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
+        # Initialization
+        X = self.X[indexes]
+        y = self.dataset.get_binary_targets()[indexes]
+        
+        # add white gaussian noise
+        noise_G = 0.01*np.random.rand()*np.random.normal(0, self.sigma, X.shape)
+        X_noisy = X + noise_G
+        
+        return self.dataset._normalize(X_noisy), y
+
+    
+def split2feat(x, n_features):
+    x_new = np.zeros((x.shape[0], int(np.ceil(x.shape[1]/n_features)*n_features)), dtype=np.int32)
+    x_new[:,:x.shape[1]] = x
+    x_new = x_new.reshape((x_new.shape[0], int(x_new.shape[1]/n_features), n_features))
+    return x_new
