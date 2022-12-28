@@ -1,0 +1,10 @@
+
+data/
+
+Microplastics_BCET/
+
+Microplastics_BCET_csv/
+
+model/.ipynb_checkpoints/
+
+*.pyc
