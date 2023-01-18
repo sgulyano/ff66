@@ -1,3 +1,4 @@
+logs/
 
 data/
 
@@ -10,3 +11,7 @@ model/.ipynb_checkpoints/
 *.pyc
 
 .ipynb_checkpoints/
+
+catboost_info/
+
+vq-vae_tutorial.ipynb

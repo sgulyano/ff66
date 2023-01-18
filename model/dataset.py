@@ -19,52 +19,26 @@ class SpectraDataset:
         self.df_reduce_ref = self._reduce_res(self.df_ref.values)
         
         # read training data
-        self.train_data, self.target, self.class_name = self._read_data('train')
+        self.train_data, self.target, self.class_name, _ = self._read_data('train')
         print(f'Read {self.train_data.shape[0]} spectra for training.')
         print('No. of data points/shifts per spectra (input shape) :', self.get_input_shape())
         print('No. of classes :', self.get_num_class())
         
         # read test data
-        self.X_test, y_target = self._read_data('test')
+        self.X_test, y_target, _ = self._read_data('test')
         print(f'Read {self.X_test.shape[0]} spectra for testing.')
         self.y_test = [(np.array(y_target) == label).astype('int8') for label in self.class_name]
         self.y_test = np.vstack(self.y_test).T
-        
-#         fl = glob.glob(os.path.join(data_dir, 'train', '*.csv'))
-#         self.target = [re.search(r'/SD_(.*)_', f).group(1) for f in fl]
-        
-#         u, c = np.unique(self.target, return_counts=True)
-#         self.class_name = u
-#         self.num_class = len(u)
-#         print(f'No. of materials : {len(u)}')
-#         print(np.vstack([u, c]).T)
 
-#         # preprocess training data
-#         self.df_reduce_ref = self._reduce_res(self.df_ref.values)
-#         self.train_data = pd.DataFrame(columns=self.df_reduce_ref,
-#                                        index=range(len(fl)))
-#         for i, f in enumerate(fl):
-#             df = pd.read_csv(f, header=None, names=['shift', 'intensity'])
-# #             print(df)
-#             signal = self._align_data(df)
-# #             print(signal)
-# #             plt.figure(figsize=(20,5))
-# #             plt.plot(self.df_ref, signal)
-#             signal = self._reduce_res(signal)
-# #             print(signal)
-# #             plt.plot(self.df_reduce_ref, signal, '--')
-# #             plt.show()
-#             self.train_data.iloc[i] = self._normalize(signal)
-            
-#         print(self.train_data.head())
-#         print(f'Read {len(fl)} spectra.')
         
         
     def _read_data(self, folder):
         # read data from folder, either train or test
         print(f'Reading {folder} data')
         fl = glob.glob(os.path.join(self.data_dir, folder, '*.csv'))
-        target = [re.search(r'/SD_(.*)_', f).group(1) for f in fl]
+        
+        if folder == 'train' or folder == 'test':
+            target = [re.search(r'/SD_(.*)_', f).group(1) for f in fl]
         
         if folder == 'train':
             u, c = np.unique(target, return_counts=True)
@@ -85,9 +59,11 @@ class SpectraDataset:
         data = data.astype(np.float32)
 #         print(data.head())
         if folder == 'train':
-            return data, target, class_name
+            return data, target, class_name, fl
         elif folder == 'test':
-            return data, target
+            return data, target, fl
+        elif folder == 'unlabel' or folder == 'unknown':
+            return data, fl
             
     
     def _align_data(self, df_signal):
@@ -100,7 +76,8 @@ class SpectraDataset:
         """ Reduce spectrum resolution by taking average intensity 
             within the non-overlapping blocks, where block size can 
             be 2, 4, 8, or 16"""
-        return signal.reshape(-1,block_size).mean(axis=1)
+        res = signal.reshape(-1,block_size).mean(axis=1)
+        return res[10:]
     
     def _normalize(self, signal):
         return (signal - signal.min()) / (signal.max() - signal.min())
@@ -131,6 +108,33 @@ class SpectraDataset:
         # return X_test.values, np.vstack(y_test).T
         return self.X_test.values, self.y_test
 
+
+class UnlabelSpectraDataset(SpectraDataset):
+    def __init__(self, data_dir):
+        self.data_dir = data_dir
+        
+        # read ref shift
+        self.df_ref = pd.read_csv(os.path.join(data_dir, 'ref.csv'))
+        self.df_reduce_ref = self._reduce_res(self.df_ref.values)
+        
+        # read training data
+        self.train_data, _ = self._read_data('unlabel')
+        print(f'Read {self.train_data.shape[0]} unlabeled spectra for training.')
+        print('No. of data points/shifts per spectra (input shape) :', self.get_input_shape())
+
+
+class UnknownSpectraDataset(SpectraDataset):
+    def __init__(self, data_dir):
+        self.data_dir = data_dir
+        
+        # read ref shift
+        self.df_ref = pd.read_csv(os.path.join(data_dir, 'ref.csv'))
+        self.df_reduce_ref = self._reduce_res(self.df_ref.values)
+        
+        # read training data
+        self.train_data, self.fl = self._read_data('unknown')
+        print(f'Read {self.train_data.shape[0]} spectra for predicting.')
+        print('No. of data points/shifts per spectra (input shape) :', self.get_input_shape())
 
 
 class DataGenerator(tf.keras.utils.Sequence):
@@ -228,6 +232,96 @@ class DataGeneratorRNN(tf.keras.utils.Sequence):
         
         return self.dataset._normalize(X_noisy), y
 
+
+
+class DataGeneratorAE(tf.keras.utils.Sequence):
+    'Generates data for AE models as 1D arrays'
+    def __init__(self, dataset, batch_size=32, shuffle=True, sigma=1):
+        'Initialization'
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.data_shape = dataset.train_data.shape
+        self.sigma = sigma
+        self.on_epoch_end()
+
+    def __len__(self):
+        'Denotes the number of batches per epoch'
+        return int(np.floor(self.data_shape[0] / self.batch_size))
+
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+
+        # Generate data
+        X = self.__data_generation(indexes)
+
+        return X
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        self.indexes = np.arange(self.data_shape[0])
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, indexes):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
+        # Initialization
+        X = self.dataset.get_training_data()[indexes]
+        # y = self.dataset.get_binary_targets()[indexes]
+        
+        # add white gaussian noise
+        noise_G = 0.01*np.random.rand()*np.random.normal(0, self.sigma, X.shape)
+        X_noisy = X + noise_G
+        
+        return np.expand_dims(self.dataset._normalize(X_noisy), axis=-1)
+
+
+
+class DataGeneratorSAE(tf.keras.utils.Sequence):
+    'Generates data for CNN/ANN models as 1D arrays'
+    def __init__(self, dataset, batch_size=32, shuffle=True, sigma=1):
+        'Initialization'
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.data_shape = dataset.train_data.shape
+        self.sigma = sigma
+        self.on_epoch_end()
+
+    def __len__(self):
+        'Denotes the number of batches per epoch'
+        return int(np.floor(self.data_shape[0] / self.batch_size))
+
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+
+        # Generate data
+        X, y = self.__data_generation(indexes)
+
+        return X, y
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        self.indexes = np.arange(self.data_shape[0])
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, indexes):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
+        # Initialization
+        X = self.dataset.get_training_data()[indexes]
+        y = self.dataset.get_binary_targets()[indexes]
+        
+        # add white gaussian noise
+        noise_G = 0.01*np.random.rand()*np.random.normal(0, self.sigma, X.shape)
+        X_noisy = X + noise_G
+        
+        return np.expand_dims(self.dataset._normalize(X_noisy), axis=-1), y.astype('float')
+    
     
 def split2feat(x, n_features):
     x_new = np.zeros((x.shape[0], int(np.ceil(x.shape[1]/n_features)*n_features)), dtype=np.int32)
